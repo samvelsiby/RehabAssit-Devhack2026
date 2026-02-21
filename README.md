@@ -62,3 +62,11 @@ Currently supports **Mini Squat Analysis** with:
 - **Dev server**: `http://localhost:8081`
 - **Testing**: `npm test`
 - **Linting**: `npm run lint`
+
+## Developers
+
+- Daniel
+- Nazif
+- Andrew
+- Samvel
+- Opeyemi
