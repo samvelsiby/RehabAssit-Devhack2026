@@ -1,4 +1,4 @@
-# RehabAssist
+r# RehabAssist
 
 A rehabilitation exercise analysis platform using MediaPipe pose detection for real-time form feedback and rep counting.
 
@@ -70,3 +70,5 @@ Currently supports **Mini Squat Analysis** with:
 - Andrew
 - Samvel
 - Opeyemi
+
+Happy Hacking!
