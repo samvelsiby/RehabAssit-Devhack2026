@@ -4,13 +4,12 @@ import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, Camera, CameraOff, Activity, Volume2, VolumeX,
-  CheckCircle2, Timer, Dumbbell, Sparkles,
+  CheckCircle2, Timer, Dumbbell,
 } from 'lucide-react';
 import { useAssignedExercises, getExerciseRules, type ExerciseMode } from '@/hooks/useExercises';
 import { useLogSession, useTodaySessionLogs } from '@/hooks/useSessionLogs';
 import { useExerciseSession } from '@/hooks/useExerciseSession';
 import { useVoiceAssistant } from '@/hooks/useVoiceAssistant';
-import { useGeminiCoach } from '@/hooks/useGeminiCoach';
 import type { Side } from '@/services/exercises/mini-squat-analyzer';
 import { toast } from '@/components/ui/sonner';
 import type { AnalyzerResult, Point } from '@/utils/exercise-geometry';
@@ -362,11 +361,6 @@ export default function ExerciseSession() {
     issues: string[]; summary: string | null; loading: boolean;
   } | null>(null);
 
-  // Full session summary state (shown after all sets)
-  const [sessionSummary, setSessionSummary] = useState<string | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-
-
   // Accumulated session data for the summary
   const setLogsRef = useRef<Array<{
     setNumber: number; correctReps: number; incorrectReps: number;
@@ -386,19 +380,8 @@ export default function ExerciseSession() {
   const demoRef = useRef<HTMLCanvasElement>(null);
   const demoRafRef = useRef<number | null>(null);
 
-  // ── Voice + Gemini coach ──────────────────────────────────────────────────
+  // ── Voice coach ────────────────────────────────────────────────────────
   const { announce, announceFeedback, announceRep, cancel: cancelVoice } = useVoiceAssistant(voiceOn);
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-
-  const { coachSetComplete, coachSessionComplete, coachFormIssue, generateSetSummary, generateSessionSummary } =
-    useGeminiCoach({
-      onCoach: (text) => { if (voiceOn) announce(text); },
-      enabled: voiceOn,
-    });
-
-  // Track feedback changes for Gemini live coaching
-  const lastFeedbackRef = useRef<string>('');
-  const formIssueCountRef = useRef(0);
 
   // ── Exercise hook ──────────────────────────────────────────────────────────
   const { initialize, startAnalysis, stopAnalysis, pauseAnalysis, resumeAnalysis, resetAnalysis, isInitialized, isAnalyzing, isPaused, error: analysisError } =
@@ -520,66 +503,30 @@ export default function ExerciseSession() {
     });
 
     if (currentSet >= targetSets) {
-      // ── Session done: voice announcement + generate written summary ──────
+      // ── Session done: voice announcement ──────
       if (voiceOn) {
-        coachSessionComplete({
-          totalSets: targetSets,
-          totalCorrect: setLogsRef.current.reduce((s, e) => s + e.correctReps, 0),
-          totalReps: setLogsRef.current.reduce((s, e) => s + e.correctReps + e.incorrectReps, 0),
-          exerciseName: exerciseName ?? 'exercise',
-        });
-      } else {
         announce('All sets complete! Excellent work!');
       }
 
-      // Generate detailed written summary with Gemini
-      if (API_KEY) {
-        setSummaryLoading(true);
-        const allIssues = Array.from(sessionIssueCountRef.current.entries())
-          .map(([issue, count]) => ({ issue, count }))
-          .sort((a, b) => b.count - a.count);
-        generateSessionSummary({
-          exerciseName: exerciseName ?? 'Exercise',
-          sets: setLogsRef.current,
-          allIssues,
-        }).then(text => {
-          setSessionSummary(text || null);
-          setSummaryLoading(false);
-        });
-      }
+      // Per-set quick stats
+      setSetPopup({
+        setNumber: currentSet, totalSets: targetSets,
+        correct: correctInSet, incorrect: incorrectInSet, formScore,
+        issues: issuesThisSet, summary: null, loading: false,
+      });
+
+      setSetBaseCorrect(currentResult?.correct ?? 0);
+      startRest(rules.restBetweenSets);
     } else {
-      // ── Set done: voice + per-set popup with AI summary ──────────────────
-      if (voiceOn) {
-        coachSetComplete({
-          setNumber: currentSet, totalSets: targetSets,
-          correctReps: correctInSet, incorrectReps: incorrectInSet,
-          exerciseName: exerciseName ?? 'exercise',
-          formIssues: issuesThisSet,
-        });
-      } else {
-        announce(`Set ${currentSet} complete!`);
-      }
+      // ── Set done: voice + per-set popup ──────────────────
+      announce(`Set ${currentSet} complete!`);
 
       // Show popup immediately in loading state
       setSetPopup({
         setNumber: currentSet, totalSets: targetSets,
         correct: correctInSet, incorrect: incorrectInSet, formScore,
-        issues: issuesThisSet, summary: null, loading: true,
+        issues: issuesThisSet, summary: null, loading: false,
       });
-
-      // Generate per-set summary in parallel with rest timer
-      console.log('[Gemini] API_KEY exists:', !!API_KEY);
-      if (API_KEY) {
-        generateSetSummary({
-          setNumber: currentSet, totalSets: targetSets,
-          correctReps: correctInSet, incorrectReps: incorrectInSet, formScore,
-          exerciseName: exerciseName ?? 'Exercise', issues: issuesThisSet,
-        }).then(text => {
-          setSetPopup(prev => prev ? { ...prev, summary: text || null, loading: false } : null);
-        });
-      } else {
-        setSetPopup(prev => prev ? { ...prev, loading: false } : null);
-      }
 
       setSetBaseCorrect(currentResult?.correct ?? 0);
       startRest(rules.restBetweenSets);
@@ -599,20 +546,6 @@ export default function ExerciseSession() {
       currentSetIssuesRef.current.add(issue);
       // Track session-wide issue frequency
       sessionIssueCountRef.current.set(issue, (sessionIssueCountRef.current.get(issue) ?? 0) + 1);
-
-      // Ask Gemini for a coaching tip after 4 consecutive same-issue frames
-      if (issue === lastFeedbackRef.current) {
-        formIssueCountRef.current += 1;
-        if (formIssueCountRef.current === 4 && isAnalyzing) {
-          coachFormIssue(issue, exerciseName ?? 'exercise');
-        }
-      } else {
-        lastFeedbackRef.current = issue;
-        formIssueCountRef.current = 1;
-      }
-    } else {
-      formIssueCountRef.current = 0;
-      lastFeedbackRef.current = '';
     }
   }, [currentResult?.feedback?.[0], currentResult?.correct]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -721,7 +654,7 @@ export default function ExerciseSession() {
           </div>
         </div> {/* ← closes mb-5 header div */}
 
-        {/* All sets done — AI Summary */}
+        {/* All sets done — Summary */}
         {allSetsDone ? (
           <div className="glass rounded-xl p-8 max-w-2xl mx-auto">
             <div className="text-center mb-6">
@@ -743,45 +676,6 @@ export default function ExerciseSession() {
                   </div>
                 );
               })}
-            </div>
-
-            {/* Gemini AI Summary */}
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-5 mb-6">
-              <div className="flex items-center gap-2 mb-3">
-                <Sparkles className="h-4 w-4 text-primary" />
-                <span className="text-sm font-semibold text-primary">AI Session Summary</span>
-              </div>
-
-              {summaryLoading ? (
-                <div className="flex items-center gap-3 py-4">
-                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  <span className="text-sm text-muted-foreground">Gemini is analysing your session…</span>
-                </div>
-              ) : sessionSummary ? (
-                /* Render markdown sections as styled text */
-                <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed space-y-3">
-                  {sessionSummary.split('\n').map((line, i) => {
-                    if (line.startsWith('## ')) return (
-                      <h3 key={i} className="font-semibold text-foreground mt-4 mb-1 text-base">{line.replace('## ', '')}</h3>
-                    );
-                    if (line.startsWith('- ')) return (
-                      <p key={i} className="text-muted-foreground pl-3 border-l-2 border-primary/30">{line.replace('- ', '')}</p>
-                    );
-                    if (line.startsWith('**') && line.endsWith('**')) return (
-                      <p key={i} className="font-medium text-foreground">{line.replace(/\*\*/g, '')}</p>
-                    );
-                    return line.trim() ? (
-                      <p key={i} className="text-muted-foreground">{line}</p>
-                    ) : null;
-                  })}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {API_KEY
-                    ? 'Summary generation failed — check your Gemini API key.'
-                    : 'Add VITE_GEMINI_API_KEY to .env.local to enable AI summaries.'}
-                </p>
-              )}
             </div>
 
             <Button onClick={() => navigate('/dashboard')} className="w-full bg-primary text-primary-foreground">
@@ -847,24 +741,6 @@ export default function ExerciseSession() {
                       ))}
                     </div>
                   )}
-
-                  {/* AI Summary */}
-                  <div className="rounded-lg bg-primary/5 border border-primary/15 p-4 mb-5">
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <Sparkles className="h-3.5 w-3.5 text-primary" />
-                      <span className="text-xs font-semibold text-primary">AI Coach</span>
-                    </div>
-                    {setPopup.loading ? (
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                        <span className="text-xs text-muted-foreground">Analysing your set…</span>
-                      </div>
-                    ) : setPopup.summary ? (
-                      <p className="text-sm text-muted-foreground leading-relaxed">{setPopup.summary}</p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">Add VITE_GEMINI_API_KEY for AI coaching.</p>
-                    )}
-                  </div>
 
                   {/* Skip rest button */}
                   <button

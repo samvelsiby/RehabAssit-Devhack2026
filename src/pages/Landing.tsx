@@ -26,7 +26,7 @@ const features = [
   {
     icon: Brain,
     title: "Intelligent Feedback",
-    description: "Gemini-powered session analysis with personalized improvement insights.",
+    description: "Real-time exercise feedback with personalized improvement insights.",
   },
   {
     icon: BarChart3,
